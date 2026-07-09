@@ -35,6 +35,7 @@ func TestPrometheusTranslator(t *testing.T) {
 		"WithValidConfig": {
 			input: map[string]interface{}{
 				"opentelemetry": map[string]interface{}{
+					"cluster_name": "test-cluster",
 					"collect": map[string]interface{}{
 						"prometheus": map[string]interface{}{
 							"config_path": createTempPromConfig(t),
@@ -47,10 +48,10 @@ func TestPrometheusTranslator(t *testing.T) {
 		"WithClusterName": {
 			input: map[string]interface{}{
 				"opentelemetry": map[string]interface{}{
+					"cluster_name": "my-cluster",
 					"collect": map[string]interface{}{
 						"prometheus": map[string]interface{}{
-							"config_path":  createTempPromConfig(t),
-							"cluster_name": "my-cluster",
+							"config_path": createTempPromConfig(t),
 						},
 					},
 				},
@@ -60,10 +61,10 @@ func TestPrometheusTranslator(t *testing.T) {
 		"WithInvalidClusterName": {
 			input: map[string]interface{}{
 				"opentelemetry": map[string]interface{}{
+					"cluster_name": `bad"name`,
 					"collect": map[string]interface{}{
 						"prometheus": map[string]interface{}{
-							"config_path":  createTempPromConfig(t),
-							"cluster_name": `bad"name`,
+							"config_path": createTempPromConfig(t),
 						},
 					},
 				},
@@ -73,6 +74,7 @@ func TestPrometheusTranslator(t *testing.T) {
 		"WithMissingConfigFile": {
 			input: map[string]interface{}{
 				"opentelemetry": map[string]interface{}{
+					"cluster_name": "test-cluster",
 					"collect": map[string]interface{}{
 						"prometheus": map[string]interface{}{
 							"config_path": "/nonexistent/path.yml",
@@ -109,10 +111,10 @@ func TestPrometheusTranslator(t *testing.T) {
 func TestPrometheusTranslatorClusterNameProcessor(t *testing.T) {
 	conf := confmap.NewFromStringMap(map[string]interface{}{
 		"opentelemetry": map[string]interface{}{
+			"cluster_name": "test-cluster",
 			"collect": map[string]interface{}{
 				"prometheus": map[string]interface{}{
-					"config_path":  createTempPromConfig(t),
-					"cluster_name": "test-cluster",
+					"config_path": createTempPromConfig(t),
 				},
 			},
 		},
@@ -139,9 +141,9 @@ func TestPrometheusTranslatorNoClusterNameProcessor(t *testing.T) {
 
 	tt := NewTranslator()
 	got, err := tt.Translate(conf)
-	require.NoError(t, err)
-	assert.Equal(t, 1, got.Processors.Len())
-	assert.Equal(t, "transform/prometheus_scope", got.Processors.Keys()[0].String())
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "cluster_name is required for prometheus: set opentelemetry::cluster_name in config")
 }
 
 func TestPrometheusReceiverTranslator(t *testing.T) {
@@ -231,10 +233,10 @@ func TestPrometheusTranslatorK8sMode(t *testing.T) {
 
 	conf := confmap.NewFromStringMap(map[string]interface{}{
 		"opentelemetry": map[string]interface{}{
+			"cluster_name": "test-cluster",
 			"collect": map[string]interface{}{
 				"prometheus": map[string]interface{}{
-					"config_path":  createTempPromConfig(t),
-					"cluster_name": "test-cluster",
+					"config_path": createTempPromConfig(t),
 				},
 			},
 		},
