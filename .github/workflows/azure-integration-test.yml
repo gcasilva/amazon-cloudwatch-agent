@@ -1,0 +1,118 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT
+
+# Manual-only Azure VM integration test; isolated from the EC2/EKS/ECS matrix in test-artifacts.yml.
+# Consumes an artifact already built by build-test-artifacts.yml (this does NOT build) — pass the build SHA
+# as build_id, same as the other integration-test jobs. The runner pulls that .deb from the integ S3 bucket
+# and terraform uploads it to the VM over SSH (Azure VMs can't read the integ bucket directly).
+# Reuses vars.TERRAFORM_AWS_ASSUME_ROLE for AWS; Azure ARM_* secrets + azure_* vars come from setup.sh.
+name: Azure VM Integration Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: 'SHA of a completed build-test-artifacts.yml run (the .deb is read from S3 under this key)'
+        required: true
+        type: string
+      test_repo_branch:
+        description: 'Branch of amazon-cloudwatch-agent-test to run'
+        required: false
+        default: main
+        type: string
+      region:
+        description: 'AWS region holding the built artifact + used for CloudWatch validation'
+        required: false
+        default: us-west-2
+        type: string
+
+env:
+  TERRAFORM_AWS_ASSUME_ROLE_DURATION: 14400 # 4 hours
+  CWA_GITHUB_TEST_REPO_NAME: "aws/amazon-cloudwatch-agent-test"
+  CWA_GITHUB_TEST_REPO_URL: "https://github.com/aws/amazon-cloudwatch-agent-test.git"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  AzureVMIntegrationTest:
+    name: 'AzureVM-default-otel'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ env.CWA_GITHUB_TEST_REPO_NAME }}
+          ref: ${{ inputs.test_repo_branch }}
+
+      # AWS creds for pulling the built .deb, creating the terraform IAM role, and reading CloudWatch for validation.
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ vars.TERRAFORM_AWS_ASSUME_ROLE }}
+          aws-region: ${{ inputs.region }}
+          role-duration-seconds: ${{ env.TERRAFORM_AWS_ASSUME_ROLE_DURATION }}
+
+      # Pull the .deb build-test-artifacts.yml already put in the integ bucket; terraform then SCPs it to the VM.
+      - name: Download pre-built agent .deb
+        env:
+          DEB_S3_URI: "s3://${{ vars.S3_INTEGRATION_BUCKET }}/integration-test/binary/${{ inputs.build_id }}/linux/amd64/amazon-cloudwatch-agent.deb"
+        run: |
+          if ! aws s3 ls "$DEB_S3_URI" >/dev/null 2>&1; then
+            echo "::error::No agent .deb at $DEB_S3_URI — run build-test-artifacts.yml for this SHA first."
+            exit 1
+          fi
+          aws s3 cp "$DEB_S3_URI" "${{ github.workspace }}/amazon-cloudwatch-agent.deb" --no-progress
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.12.0
+
+      - name: Terraform apply
+        id: terraform_apply
+        continue-on-error: true
+        timeout-minutes: 45
+        working-directory: terraform/azurevm
+        # azurerm provider reads ARM_* from env; AWS provider uses the assumed role above.
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          terraform init
+          terraform apply --auto-approve \
+            -var="region=${{ inputs.region }}" \
+            -var="cwa_github_sha=${{ inputs.build_id }}" \
+            -var="agent_deb_path=${{ github.workspace }}/amazon-cloudwatch-agent.deb" \
+            -var="github_test_repo=${{ env.CWA_GITHUB_TEST_REPO_URL }}" \
+            -var="github_test_repo_branch=${{ inputs.test_repo_branch }}" \
+            -var="azure_resource_group=${{ vars.AZURE_RESOURCE_GROUP }}" \
+            -var="azure_vnet_name=${{ vars.AZURE_VNET_NAME }}" \
+            -var="azure_oidc_provider_arn=${{ vars.AZURE_OIDC_PROVIDER_ARN }}" \
+            -var="azure_token_audience=${{ vars.AZURE_TOKEN_AUDIENCE }}"
+
+      - name: Fail if apply failed
+        if: steps.terraform_apply.outcome == 'failure'
+        run: exit 1
+
+      # Always destroy, even on cancel/failure, so no Azure VM or AWS role is left running.
+      - name: Terraform destroy
+        if: ${{ always() }}
+        working-directory: terraform/azurevm
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          terraform destroy --auto-approve \
+            -var="region=${{ inputs.region }}" \
+            -var="cwa_github_sha=${{ inputs.build_id }}" \
+            -var="agent_deb_path=${{ github.workspace }}/amazon-cloudwatch-agent.deb" \
+            -var="azure_resource_group=${{ vars.AZURE_RESOURCE_GROUP }}" \
+            -var="azure_vnet_name=${{ vars.AZURE_VNET_NAME }}" \
+            -var="azure_oidc_provider_arn=${{ vars.AZURE_OIDC_PROVIDER_ARN }}" \
+            -var="azure_token_audience=${{ vars.AZURE_TOKEN_AUDIENCE }}" || true
