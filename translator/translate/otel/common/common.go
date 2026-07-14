@@ -558,26 +558,6 @@ func GetClusterName(conf *confmap.Conf) string {
 	return util.GetClusterNameFromEc2Tagger()
 }
 
-// DefaultCollectionInterval is the default collection interval for OpenTelemetry-based features.
-const DefaultCollectionInterval = 30 * time.Second
-
 // ClusterNameRegex restricts cluster_name to safe characters, preventing
 // OTTL injection and template metacharacter issues.
 var ClusterNameRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
-
-// GetOtelClusterName returns the cluster name for OpenTelemetry-based features.
-// It reads exclusively from opentelemetry::cluster_name.
-func GetOtelClusterName(conf *confmap.Conf) string {
-	val, _ := GetString(conf, ConfigKey(OpenTelemetryKey, ClusterNameKey))
-	return val
-}
-
-// GetCollectionInterval returns the collection interval for an OpenTelemetry feature.
-// It checks the feature-specific collection_interval field. Default is 30s.
-func GetCollectionInterval(conf *confmap.Conf, featureKey string) time.Duration {
-	key := ConfigKey(featureKey, CollectionIntervalKey)
-	if v, ok := GetNumber(conf, key); ok && v > 0 {
-		return time.Duration(v) * time.Second
-	}
-	return DefaultCollectionInterval
-}
